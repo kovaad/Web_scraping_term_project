@@ -151,7 +151,8 @@ final_df[order(final_df$date),] %>% filter( (ranking %in% c(seq(1,50,1))) & (dat
     x = "points",
     y = "player",
     time = "date",
-    title = "Top 50 tennis players from 1996-08-12 to 2021-12-13"
+    title = "Top 50 tennis players from 1996-08-12 to 2021-12-13",
+    frameDur = 0.5
   )
 
 ```
@@ -518,10 +519,10 @@ min <- min(final_df2$platforms_used)
 max <- max(final_df2$platforms_used)
 
 ggplot(final_df2, aes(platforms_used)) +
-  geom_histogram(colour="firebrick4", fill="lightblue", bins=6) +
+  geom_histogram(colour="darkred", fill="darkgreen", bins=6) +
   geom_vline(aes(xintercept=mean(platforms_used)),
              color="black", linetype="dashed", size=1) +
-  geom_text(aes(mean(platforms_used), 15, label=paste0("Mean: ",round(mean(platforms_used), 2))), hjust = 1.2, vjust = -12) +
+  annotate("text", x = 1.7, y = 20, label = paste0("Mean: ", round(mean(final_df2$platforms_used), 2))) +
   labs(title = 'Number of media platforms used by players',
        x = 'Platforms used',
        y = 'Number of tennis players') +
@@ -540,10 +541,10 @@ As can be seen on the figure, tennis players generally tend to reach their peak 
 final_df2 <- final_df2 %>% mutate(peak_reached = year(final_df2$bestranktime) - year(final_df2$birthday))
 
 ggplot(final_df2, aes(peak_reached)) +
-  geom_histogram(colour="firebrick4", fill="lightblue", binwidth=2) +
+  geom_histogram(colour="darkred", fill="darkgreen", binwidth=2) +
   geom_vline(aes(xintercept=mean(peak_reached)),
              color="black", linetype="dashed", size=1) +
-  geom_text(aes(mean(peak_reached), 15, label=paste0("Mean: ",round(mean(peak_reached), 2))), hjust = 1.2, vjust = -12) +
+  annotate("text", x = 25.3, y = 20, label = paste0("Mean: ", round(mean(final_df2$peak_reached), 2))) +
   labs(title = 'Age at which highest position reached by players',
        x = 'Age',
        y = 'Number of tennis players') +

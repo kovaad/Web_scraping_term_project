@@ -12,7 +12,7 @@ output:
 
 ## Introduction
 
-This is my report for the final project of the Coding 2: Web scraping course at the Central European University. 
+This is a report for the final project of the Coding 2: Web scraping course at the Central European University. 
 
 In this project I had to do two things:
 
@@ -20,6 +20,8 @@ In this project I had to do two things:
 2. Select the year 2010 and download all the player statistics
 
 I was also advised to use the techniques that I learned during the course: write functions, use lapply,  and rbindlist to create dataframes and create a report on the findings.
+
+All codes and data are available in the github repository [**here**](https://github.com/kovaad/Web_scraping_term_project).  
 
 ### Preparatory steps
 
@@ -128,7 +130,7 @@ The dataframe has 217669 record and its head looks like this:
 
 ```{r rad and show dataframe, message = FALSE, warning = FALSE, echo = TRUE, eval = TRUE}
 #read in the dataframe
-final_df <- read_csv("data/final_df.csv")
+final_df <- read_csv("https://raw.githubusercontent.com/kovaad/Web_scraping_term_project/main/data/final_df.csv")
 
 #show its top 5 rows
 head(final_df,5) %>%
@@ -493,7 +495,7 @@ The dataframe can then be read and it looks like this (scroll to see all columns
 
 options(width = 10)
 #read in the dataframe
-final_df2 <- read_csv("data/final_df2.csv")
+final_df2 <- read_csv("https://raw.githubusercontent.com/kovaad/Web_scraping_term_project/main/data/final_df2.csv")
 
 #show dataframe
 head(final_df2,5) %>%

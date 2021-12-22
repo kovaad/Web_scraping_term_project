@@ -1,0 +1,578 @@
+---
+title: "Downloading and getting insights from tennis data"
+author: "Adam Jozsef Kovacs"
+date: "22/12/2021"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+<style> body {text-align: justify} </style>
+
+## Introduction
+
+This is my report for the final project of the Coding 2: Web scraping course at the Central European University. 
+
+In this project I had to do two things:
+
+1. Download the top 100 tennis player historically
+2. Select the year 2010 and download all the player statistics
+
+I was also advised to use the techniques that I learned during the course: write functions, use lapply,  and rbindlist to create dataframes and create a report on the findings.
+
+### Preparatory steps
+
+First, I clean the environment and install the required packages. 
+
+```{r load packages, message = FALSE, warning = FALSE, echo = TRUE, eval = TRUE, comment=FALSE}
+
+#clean environment
+rm(list =ls())
+
+#loading packages with pacman
+if (!require("pacman")) {
+  install.packages("pacman")
+}
+
+pacman::p_load(rvest, data.table, xml2,kableExtra,ddplot,lubridate, ggrepel, gridExtra, readr, dplyr)
+
+#load ddplot package for racing bar chart
+remotes::install_github("feddelegrand7/ddplot", build_vignettes = TRUE)
+
+```
+
+## Ranking table historically
+
+### Creating the database
+
+Next, I read in the base html and create a list from the drilldown of dates on the site, which I will use to create all the links to download the historical data. 
+
+```{r get links, message = FALSE, warning = FALSE, echo = TRUE, eval = FALSE}
+#read in base website
+t <- read_html("https://www.atptour.com/en/rankings/singles")
+
+#creating function to remove unnecessary text
+clean_up <- function(x) {
+  stringr::str_replace_all(x, "[\r\t\n]", "")
+}
+
+#get all the dates for which there is a list of top 100
+dates <- t %>% html_nodes(".dropdown-holder-wrapper:nth-child(1) li") %>% html_text() %>% lapply(clean_up)
+
+#first date is twice, and there are two dates for which there is absolutely no data on the site (they are bugs), so we remove these from the dates
+dates <- dates[-1] 
+
+dates <- dates[dates != "1985.03.03"]
+
+dates <- dates[dates != "1976.03.01"]
+
+#creating the links
+links <- paste0('https://www.atptour.com/en/rankings/singles?rankDate=', dates)
+
+```
+
+Next, I create a function that gets the ranking for one date. 
+
+```{r function, message = FALSE, warning = FALSE, echo = TRUE, eval = FALSE}
+#write function that gets the top 100 tennis players for one date from atptour.com 
+#and returns with a dataframe of the ranking, move, country, player, age, tournaments played, points dropping and next best
+get_top100 <- function(t_url) {
+  t <- read_html(t_url)
+  
+  df <- t %>% html_nodes(xpath ='//*[@id="rankingDetailAjaxContainer"]/table') %>%
+    html_table()
+  
+  df <- df[[1]]
+  
+  df <- df %>% mutate("Country"  = substr(t %>% html_nodes(".country-item") %>% html_nodes("img") %>%
+                                                  html_attr("src"), 26, 28) %>% toupper())
+  
+  df[["Ranking"]] <- as.numeric(df[["Ranking"]])
+  
+  df[["Points Dropping"]] <- as.numeric(df[["Points Dropping"]])
+  
+  df[["Move"]] <- as.numeric(df[["Move"]]) # change if NA to 0!!!
+  
+  temp <- t %>% html_nodes(".move-cell") %>% html_children() %>% html_attrs()
+  
+  df <- df %>% mutate(Move = case_when(temp[seq(1, length(temp), by = 2)] == "move-down" ~ Move * (-1), TRUE ~ Move))
+  
+  df [["Date"]] <- t %>% html_node(".dropdown-label") %>% html_text() %>% lapply(clean_up)
+  
+  df [["Date"]] <- as.Date(gsub(".", "-", df$Date,fixed = TRUE))
+  
+  df [["Points"]] <- as.numeric(gsub(",", "", df$Points,fixed = TRUE))
+  
+  names(df) <- c("ranking", "move","country", "player","age","points","tourn_played","points_dropping","next_best","date")
+  
+  return(df)
+}
+```
+
+After we have the function, I use lapply and rbindlist to create the final dataframe. 
+
+```{r create and save dataframe, massage = FALSE, warning = FALSE, echo = TRUE, eval = FALSE}
+#apply the function to all dates
+list_of_dfs <- lapply(links, get_top100)
+
+#bind the lists together to create the final dataframe
+final_df <- rbindlist(list_of_dfs)
+
+#Save the dataframe to a csv
+write.csv(final_df,"data/final_df.csv", row.names = FALSE)
+
+```
+
+The dataframe has 217669 record and its head looks like this:
+
+```{r rad and show dataframe, message = FALSE, warning = FALSE, echo = TRUE, eval = TRUE}
+#read in the dataframe
+final_df <- read_csv("data/final_df.csv")
+
+#show its top 5 rows
+head(final_df,5) %>%
+  kbl() %>%
+  kable_styling("basic") %>%
+  kable_paper("hover", full_width = T)
+
+```
+
+
+### Visualizations
+
+To get some insights about this vast dataset that I scraped, I create some visuals. For starters, I decided to create a racing bar chart showing the evolution of the number of points by the top 50 tennis players over time (I decided to restrict to top 50 because to see the full 100 requires a large screen). This interactive visual gives the viewer an idea of the evolution of the best tennis players over time. Since the dataframe only contains points from 1996-08-12 onwards, this is the starting date for the racing bar chart. 
+
+```{r racing bar, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 9, fig.height = 8, fig.align="center"}
+#racing bar chart
+
+final_df[order(final_df$date),] %>% filter( (ranking %in% c(seq(1,50,1))) & (date >= as.Date("1996-08-12"))) %>%
+  barChartRace(
+    x = "points",
+    y = "player",
+    time = "date",
+    title = "Top 50 tennis players from 1996-08-12 to 2021-12-13"
+  )
+
+```
+
+Having seen this evolution of players over time on the racing bar chart, I got curious about who were the players that were able to climb up the most on this list and who were the ones that somehow achieved a great position on the ranking table but then fell down spectacularly. On this next bar chart, I visualize the top 10 players that moved up the table and the top 10 players that moved down the table. Pat Cash and Vitas Gerulaitis turned out to be the players that improved the most, climbing a total of more than 300 places up over their careers. At the other end of the distribution, Tom Okker, Paolo Bertolucci, Jaime Fillol Sr. and Roscoe Tanner all went in the opposite direction more than 100 places cumulatively. 
+
+
+```{r moving bar, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 8, fig.height = 6, fig.align="center"}
+#by moving positions - who was able to move up the most or drop positions - need to group by players
+
+#replace NAs with 0
+final_df$move[is.na(final_df$move)] <- 0
+
+best_movers <- final_df %>% group_by(player) %>% summarise(moves=sum(move, na.rm = TRUE)) %>% arrange(desc(moves)) %>% top_n(10, moves)
+
+worst_movers <- final_df %>% group_by(player) %>% summarise(moves=sum(move, na.rm = TRUE)) %>% arrange(desc(-moves)) %>% top_n(10, -moves)
+
+binded <- bind_rows(best_movers, worst_movers)
+
+binded <- binded %>%
+  mutate(color = case_when(
+    moves > 0 ~ 'darkgreen',
+    TRUE ~ 'darkred'  
+  ))
+
+ggplot(binded, aes(reorder(player, moves), moves, fill = color)) +
+  scale_fill_identity() +
+  geom_col() +
+  coord_flip() +
+  labs(x = "Name of player",
+       y = "Move on ranking table",
+       title = "Tennis players who moved most up and down the ranking table",
+       subtitle = "Top 10 from 1973-08-23 to 2021-12-13")
+```
+
+Now that we have seen the evolution of tennis ranking players and the players that moved the most on the table, I decided that it was time to also see the main point of such tables: I visualized the best players of all time. For this, I calculated the average ranking by player over their careers. As can be seen on the chart the all time great (from 1973 to now) is Bjorn Borg, Roger Federer comes second, while Rafael Nadal managed to seal the third place. Novak Djokovic and Ivan Lendl come in the fourth and fifth places.  
+
+```{r best rank bar, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 6, fig.height = 6, fig.align="center"}
+#best average position bar chart
+
+final_df[["ranking"]] <- stringr::str_replace_all(final_df[["ranking"]], "T", "")
+
+final_df[["ranking"]] <- as.numeric(final_df[["ranking"]])
+
+lowestmeanranking <- final_df %>% group_by(player) %>% summarise(meanranking=mean(ranking)) %>% arrange(desc(-meanranking)) %>% top_n(5, -meanranking)
+
+lowestmeanranking %>% 
+  ggplot(aes(reorder(player, meanranking), meanranking)) + 
+  geom_col(position = 'dodge', fill = "darkgreen") +
+  labs(x = "Player",
+       y = "Mean ranking",
+       title = "Players with lowest ranking on average over the years",
+       subtitle = "Top 5 from 1973-08-23 to 2021-12-13")
+```
+
+Finally, I decided to utilize another aspect of the data, namely that for each player from the flags I was able to get the nationalities of the players. I group the entire dataset by the nationalities and calculate the average ranking by their players. Having created this view of the data, I visualize the top and bottom 5 countries that had at least one player who made it to the top 100 from 1973 to now. What we can see on the chart is that interestingly Greece, Bulgaria and less surprisingly Switzerland have the lowest average scores, while Kenya, Bahrein and Montenegro still have a lot of work to do to become dominant in tennis. 
+
+```{r country bar, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 6, fig.height = 6, fig.align="center"}
+#by country who were the best and worst
+
+worst_countries <- final_df %>% group_by(country) %>% summarise(avgranking=mean(ranking), na.rm = TRUE) %>% arrange(desc(avgranking)) %>% top_n(5, avgranking)
+
+best_countries <- final_df %>% group_by(country) %>% summarise(avgranking=mean(ranking), na.rm = TRUE) %>% arrange(desc(-avgranking)) %>% top_n(5, -avgranking)
+
+p1 <- best_countries %>% 
+  ggplot(aes(reorder(country, avgranking), avgranking)) + 
+  geom_col(position = 'dodge', fill = "darkgreen") +
+  labs(x = "Country",
+       y = "Average ranking",
+       title = "Countries with best average ranking by tennis players",
+       subtitle = "Top 5 from 1973-08-23 to 2021-12-13")
+
+p2 <- worst_countries %>% 
+  ggplot(aes(reorder(country, -avgranking), avgranking)) + 
+  geom_col(position = 'dodge', fill = "darkred") +
+  labs(x = "Country",
+       y = "Average ranking",
+       title = "Countries with worst average ranking by tennis players",
+       subtitle = "Top 5 from 1973-08-23 to 2021-12-13")
+
+grid.arrange(arrangeGrob(p1, p2))
+```
+
+
+## Player statistics for top 100 in 2010
+
+After downloading the entire database historically, I was required to choose one year and download all the player statistics. I chose the ranking table at the end of 2010, as my favorite player Rafael Nadal led the ranking table at the time. 
+
+### Creating the database
+
+First, I read in the base html with the given date and get all the relative links pointing to the top 100 players in the ranking table. Pasting the relative links with the base, I get the full links to all players of interest.
+
+```{r get links2, message = FALSE, warning = FALSE, echo = TRUE, eval = FALSE}
+#read in base website
+t2 <- read_html("https://www.atptour.com/en/rankings/singles?rankDate=2010-12-27")
+
+#get the relative links to the players
+rel_link <- t2 %>% html_nodes(".player-cell") %>% html_node("a") %>% html_attr("href")
+
+#create the full links
+links2 <- paste0("https://www.atptour.com", rel_link)
+```
+
+Now that I have the links to the players, the exercise was to get all the information I can find for the players from these sites. To this end, I created a gigantic function that does just that, from online social media, ranking, nationality and birthday to height and weight, I also scraped the statistics for the careers of the players and for the still active ones their statistics for 2021. I do not show this function in this report (it is simply too long). 
+
+```{r function2, message = FALSE, warning = FALSE, echo = FALSE, eval = FALSE}
+get_player <- function(t_url) {
+  tlist <- list()
+  
+  t2 <- read_html(t_url)
+  #get name
+  name <- paste0(t2 %>% 
+                   html_node('.first-name')%>%
+                   html_text(), " ", t2 %>% html_node('.last-name')%>%  html_text())
+  
+  tlist[["name"]] <- name
+  
+  #get current ranking
+  ranking <- trimws(t2 %>% 
+                      html_node('.data-number')%>%
+                      html_text() %>% 
+                      clean_up() %>%
+                      str_squish())
+  
+  tlist[["current_rank"]] <- ifelse(ranking == "", NA, as.numeric(ranking))
+  
+  #get nationality from flag code
+  nationality <- t2 %>% 
+    html_node(".player-flag-code") %>% 
+    html_text()
+  
+  tlist[["nationality"]] <- nationality
+  
+  #first get all the social media then put the different types in different columns
+  socials <- t2 %>% 
+    html_node(".player-profile-hero-social") %>% 
+    html_nodes("a") %>% 
+    html_attr("href") 
+  
+  tlist[["facebook"]] <- socials[grepl("^https://www.facebook.com.*", socials)]
+  
+  tlist[["instagram"]] <- socials[grepl("^https://www.instagram.com.*", socials)]
+  
+  tlist[["twitter"]] <- socials[grepl("^https://twitter.com.*|https://www.twitter.com.*", socials)]
+  
+  tlist[["youtube"]] <- socials[grepl("^https://www.youtube.com.*", socials)]
+  
+  tlist[["website"]] <- socials[!grepl("^https://www.facebook.com.*|^https://www.instagram.com.*|^https://twitter.com.*|https://www.twitter.com.*|^https://www.youtube.com.*", socials)][1]
+  
+  #get birthday
+  birthday <- trimws(t2 %>% 
+                        html_node(".table-big-value .table-birthday") %>% 
+                        html_text())
+  
+  birthday <- gsub('^.|.$', '', birthday)
+  
+  tlist[["birthday"]] <- as.Date(gsub(".", "-", birthday,fixed = TRUE))
+  
+  #to get the age where available had to remove this node
+  birthdaynode <- t2 %>% 
+    html_node(".table-birthday-wrapper")
+  xml_remove(birthdaynode)
+  
+  #get list of values
+  tiles <- trimws(t2 %>% 
+           html_nodes(".table-big-value") %>% 
+           html_text()) 
+  
+  #get age
+  tlist[["age"]] <-  ifelse(tiles[[1]] == "", NA, as.numeric(tiles[[1]]))
+  
+  #get date when turned pro
+  tlist[["turned_pro"]] <- as.numeric(tiles[[2]])
+  
+  #get weight in kg
+  weight_kg <- gsub(".*lbs","",tiles[[3]])
+  
+  tlist[["weight_kg"]] <- gsub('^.|.{3}$', '', weight_kg)
+  
+  #get weight in lbs
+  tlist[["weight_lbs"]] <- gsub("lbs.*","",tiles[[3]])
+  
+  #get height in cm
+  tlist[["height"]] <- gsub("\".*","",tiles[[4]])
+  
+  height_cm <- gsub(".*\"","",tiles[[4]])
+  
+  tlist[["height_cm"]] <- gsub('^.|.{3}$', '', height_cm)
+  
+  #get another list
+  tiles2 <- trimws(t2 %>% 
+                     html_nodes(".table-value") %>% 
+                     html_text()) 
+  #get birth city
+  tlist[["birth_city"]] <- strsplit(tiles2[[1]], ", ")[[1]][1]
+  
+  #get birth country
+  tlist[["birth_country"]] <- strsplit(tiles2[[1]], ", ")[[1]][2]
+  
+  #get which handed
+  tlist[["handed"]] <- strsplit(tiles2[[2]], ", ")[[1]][1]
+  
+  #get style of play
+  tlist[["style"]] <- strsplit(tiles2[[2]], ", ")[[1]][2]
+  
+  #get coaches
+  tlist[["coach(es)"]] <- ifelse(tiles2[[3]] == "", NA, tiles2[[3]])
+  
+  #get table with information on game stats
+  playertable <- t2 %>% html_nodes(xpath ='//*[@id="playersStatsTable"]') %>%
+    html_table()
+  
+  playertable <- playertable[[1]]
+  
+  #there are active and inactive players and the tables have different dimensions for them 
+  #that is why the if else is needed
+  if (count(playertable) == 2) {
+    
+    #if active player first get stats for 2021
+    now <- playertable %>% filter(X2 == "2021")
+    #get rank in 2021
+    rank2021 <- strsplit(now[["X3"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]
+    
+    tlist[["rank2021"]] <- rank2021
+    
+    #get wins and loses
+    winlose2021 <- strsplit(now[["X5"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]
+    
+    tlist[["win2021"]] <- strsplit(winlose2021,"-")[[1]][1]
+    
+    tlist[["lose2021"]] <- strsplit(winlose2021,"-")[[1]][2]
+    
+    #get titles
+    tlist[["titles2021"]] <- strsplit(now[["X6"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]
+    
+    #get prizemoney collected
+    prize2021 <- strsplit(now[["X7"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]
+    
+    tlist[["prizemoney2021"]] <- as.numeric(gsub("\\$|,", "", prize2021))
+    
+    #get career stats
+    career <- playertable %>% filter(X2 == "Career")
+    
+    #get bast rank
+    bestrank <- ifelse(!is.na(career[["X3"]]),as.numeric(strsplit(career[["X3"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]), NA)
+    
+    tlist[["bestrank"]] <- bestrank
+    
+    #get when reached
+    bestranktime <- ifelse(!is.na(career[["X3"]]),strsplit(career[["X3"]] %>% clean_up() %>% str_squish(), " ")[[1]][4], NA)
+    
+    bestranktime <- as.Date(gsub(".", "-", bestranktime,fixed = TRUE))
+    
+    tlist[["bestranktime"]] <- bestranktime
+    
+    #get win-lose stats
+    winlose <- ifelse(!is.na(career[["X5"]]), strsplit(career[["X5"]] %>% clean_up() %>% str_squish(), " ")[[1]][1], NA)
+    
+    tlist[["win"]] <- ifelse(!is.na(winlose), as.numeric(strsplit(winlose,"-")[[1]][1]), NA)
+    
+    tlist[["lose"]] <- ifelse(!is.na(winlose), as.numeric(strsplit(winlose,"-")[[1]][2]), NA)
+    
+    #get titles
+    tlist[["titles"]] <- ifelse(!is.na(career[["X6"]]),as.numeric(strsplit(career[["X6"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]), NA)
+    
+    #get prizemoney
+    prize <- ifelse(!is.na(career[["X7"]]),strsplit(career[["X7"]] %>% clean_up() %>% str_squish(), " ")[[1]][1], NA)
+    
+    tlist[["prizemoney"]] <-  ifelse(!is.na(prize), as.numeric(gsub("\\$|,", "", prize)), NA)
+    
+  } else {
+    
+    #for inactive players set 2021 variables NA -
+    tlist[["rank2021"]] <- NA
+    
+    tlist[["win2021"]] <- NA
+    
+    tlist[["lose2021"]] <- NA
+    
+    tlist[["titles2021"]] <- NA
+    
+    tlist[["prizemoney2021"]] <- NA
+    
+    #get career stats
+    career <- playertable %>% filter(X3 == "Career")
+    
+    #get best rank
+    bestrank <- ifelse(!is.na(career[["X4"]]),as.numeric(strsplit(career[["X4"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]), NA)
+    
+    tlist[["bestrank"]] <- bestrank
+    
+    #get when best rank reached
+    bestranktime <- ifelse(!is.na(career[["X4"]]),strsplit(career[["X4"]] %>% clean_up() %>% str_squish(), " ")[[1]][4], NA)
+    
+    bestranktime <- as.Date(gsub(".", "-", bestranktime,fixed = TRUE))
+    
+    tlist[["bestranktime"]] <- bestranktime
+    
+    #get win-lose stats
+    winlose <- ifelse(!is.na(career[["X6"]]), strsplit(career[["X6"]] %>% clean_up() %>% str_squish(), " ")[[1]][1], NA)
+    
+    tlist[["win"]] <- ifelse(!is.na(winlose), as.numeric(strsplit(winlose,"-")[[1]][1]), NA)
+    
+    tlist[["lose"]] <- ifelse(!is.na(winlose), as.numeric(strsplit(winlose,"-")[[1]][2]), NA)
+    
+    #get titles
+    tlist[["titles"]] <- ifelse(!is.na(career[["X7"]]),as.numeric(strsplit(career[["X7"]] %>% clean_up() %>% str_squish(), " ")[[1]][1]), NA)
+    
+    prize <- ifelse(!is.na(career[["X8"]]),strsplit(career[["X8"]] %>% clean_up() %>% str_squish(), " ")[[1]][1], NA)
+    
+    #get prizemoney
+    tlist[["prizemoney"]] <-  ifelse(!is.na(prize), as.numeric(gsub("\\$|,", "", prize)), NA)
+    
+  }
+  
+  return(tlist)
+}
+
+```
+
+With the help of this super function, it takes now only two lines of code to create the second final dataframe contatining detailed information for all tennis players that made into the top 100 ranked at the end of 2010. 
+
+```{r create and save dataframe2, message = FALSE, warning = FALSE, echo = TRUE, eval = FALSE}
+#apply the function on the links
+list_of_dfs2 <- lapply(links2, get_player)
+
+#bind the lists for all dates in a dataframe
+final_df2 <- rbindlist(list_of_dfs2)
+
+#write to csv
+write.csv(final_df2,"data/final_df2.csv", row.names = FALSE)
+
+```
+
+The dataframe can then be read and it looks like this (scroll to see all columns):
+
+```{r read in dataframe2, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width=10}
+
+options(width = 10)
+#read in the dataframe
+final_df2 <- read_csv("data/final_df2.csv")
+
+#show dataframe
+head(final_df2,5) %>%
+  kbl() %>%
+  kable_styling("basic", (latex_options = c("striped", "scale_down"))) %>%
+  kable_paper("hover", full_width = T)  %>% scroll_box(width = "100%")
+```
+
+
+### Visualizations
+
+This dataset is a much more detailed one, with plenty of interesting insights to potentially show. I decided to limit these to three especially interesting ones. 
+
+For the first, I decided to create a new variable that counts the number of social media platforms that a user has. The role social media platform plays in the value and success of sport players became an interesting topic in sport sciences over the past couple of years and so I was curious of the distribution. Of course the number of followers would probably tell even more, but I still found it interesting to look at how common it is among tennis players to build their brands in various different platforms. As can be seen on the histogram, on average they use 2.31 sites, but some use 5 different ones and others do not have any. 
+
+```{r histogram1, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 6, fig.height = 6, fig.align="center"}
+#how many social media platforms do the tennis players use?
+
+final_df2 <- final_df2 %>% mutate(platforms_used = rowSums(!is.na(final_df2 %>% dplyr::select(facebook:website))))
+
+min <- min(final_df2$platforms_used)
+
+max <- max(final_df2$platforms_used)
+
+ggplot(final_df2, aes(platforms_used)) +
+  geom_histogram(colour="firebrick4", fill="lightblue", bins=6) +
+  geom_vline(aes(xintercept=mean(platforms_used)),
+             color="black", linetype="dashed", size=1) +
+  geom_text(aes(mean(platforms_used), 15, label=paste0("Mean: ",round(mean(platforms_used), 2))), hjust = 1.2, vjust = -12) +
+  labs(title = 'Number of media platforms used by players',
+       x = 'Platforms used',
+       y = 'Number of tennis players') +
+  scale_x_continuous(breaks = seq(min,max,1)) + 
+  theme_bw()
+
+```
+
+For the second plot, I again was curious about a distribution, but now I wanted to see at what age players reach their top position on the ranking table. For this, I again needed to create a new variable, in which I subtracted the birthdate of the players from the time when they were at their peak in terms of place in the ranking table. 
+
+As can be seen on the figure, tennis players generally tend to reach their peak at around 27 years of age, but some interesting extreme values are also worthwhile to note: There are some players who reached their peak at 20, while for some others it took much more time, way into their 30s up to 36 years of age. 
+
+```{r histogram2, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 6, fig.height = 6, fig.align="center"}
+#what age do tennis players on this list reached their peak position
+
+final_df2 <- final_df2 %>% mutate(peak_reached = year(final_df2$bestranktime) - year(final_df2$birthday))
+
+ggplot(final_df2, aes(peak_reached)) +
+  geom_histogram(colour="firebrick4", fill="lightblue", binwidth=2) +
+  geom_vline(aes(xintercept=mean(peak_reached)),
+             color="black", linetype="dashed", size=1) +
+  geom_text(aes(mean(peak_reached), 15, label=paste0("Mean: ",round(mean(peak_reached), 2))), hjust = 1.2, vjust = -12) +
+  labs(title = 'Age at which highest position reached by players',
+       x = 'Age',
+       y = 'Number of tennis players') +
+  scale_x_continuous(breaks = seq(min(final_df2$peak_reached),max(final_df2$peak_reached),1)) + 
+  theme_bw()
+```
+
+Finally, I also wanted to create a plot that shows the relationship between variables in the dataframe. To this end, I visualize a scatter plot with the number of wins the players have had over their career on the x axis and the prizemoney they collected. The points are then colored based on the style they play. What we can see on this chart is not atypical of single player sports. There are some players who are way above the others, both in number of wins and money collected. The notable ones are Roger Federer, who has the most wins and Novak Djokovic, who collected the most money, but also Rafael Nadal and Andy Murray are notable names. Among the rest, there is also a clear positive relationship between the number of wins and prize money collected. Regarding the style, most players play with two0handed backhand, but there are some who lpay one-handed backhand (the most notale being Federer), and for some it is unknown. 
+
+```{r scatter, message = FALSE, warning = FALSE, echo = FALSE, eval = TRUE, fig.width = 9, fig.height = 6, fig.align="center"}
+#scatter of prizemoney and titles
+
+final_df2 %>% 
+  ggplot(aes(win, prizemoney)) + 
+  geom_point(aes(color = style), position = 'jitter') +
+  geom_text_repel(aes(label=name)) +
+  labs(x = "Wins",
+       y = "Prize money (USD)",
+       title = "Relationship between wins and prize money",
+       subtitle = "Top 100 ranked tennis players as of 2010-12-17") +
+  scale_y_continuous() +
+  theme_bw()
+```
+
+## Conclusions
+
+To conclude, in this project, I downloaded the top 100 tennis player historically and selected the year 2010 and downloaded also all the player statistics for that year. Using some interesting visuals, I was also able to learn about the data some interesting insights: 
+
+I looked at the evolution of the ranking table over time with the help of a racing bar chart. Then, I learned about who were the players that moved the most upwards and downwards on the ranking table throughout their careers (Pat Cash  moved most up, while .. moved the most down). Next, I also looked at who are the best players of all time based on average ranking over their careers (Bjorn Borg tops the list). After this, I looked at the best and worst performing countries in tennis (interestingly Greece came on top, while Kenya is at the bottom). 
+
+For the detailed player statistics of the 2010 ranking table, I also got some insights through visuals. I learned that players on average have around 2-3 social media sites, and reach their peak performance at around the age of 27. Finally, I also looked at the relationship between the number of wins by players and the prize money they collected. There is a clear positive relationship with some exceptional players having much more wins and also much more prize money. 
+
